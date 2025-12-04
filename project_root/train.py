@@ -87,8 +87,7 @@ if __name__ == "__main__":
         train_seq,
         validation_data=val_seq if len(val_files) > 0 else None,
         epochs=EPOCHS_HEAD,
-        use_multiprocessing=False,
-        workers=2
+        
     )
 
     # Stage 2: unfreeze top layers
