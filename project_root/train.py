@@ -1,124 +1,114 @@
+import tensorflow as tf
+import numpy as np
 import os
 import cv2
-import numpy as np
-import tensorflow as tf
+from tensorflow.keras.utils import to_categorical, Sequence
 
 from preprocessing.face_preprocess import FacePreprocessor
 from model.mobilenet_emotion import build_mobilenet_emotion
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-IMG_SIZE = 224
-BATCH_SIZE = 32
-EPOCHS_HEAD = 10
-EPOCHS_FINE = 5
+# ---------- CONFIG ----------
 NUM_CLASSES = 7
+IMG_SIZE = 224
+BATCH_SIZE = 8       # small batch to avoid OOM; increase later if GPU available
+EPOCHS_HEAD = 8
+EPOCHS_FINE = 3
 MODEL_SAVE_PATH = "face_emotion_v1.keras"
 
 preprocessor = FacePreprocessor()
 
-# -----------------------------
-# LOAD DATASET
-# -----------------------------
-def load_dataset(folder):
-    images = []
-    labels = []
-
-    # expects folder structure: folder/0/, folder/1/, ..., folder/6/
+def list_files_in_folder(folder):
+    files = []
     for label in range(NUM_CLASSES):
-        class_path = os.path.join(folder, str(label))
-        if not os.path.exists(class_path):
+        class_dir = os.path.join(folder, str(label))
+        if not os.path.exists(class_dir):
             continue
+        for fname in os.listdir(class_dir):
+            if fname.lower().endswith(('.jpg','.jpeg','.png')):
+                files.append((os.path.join(class_dir, fname), label))
+    return files
 
-        for fname in os.listdir(class_path):
-            img_path = os.path.join(class_path, fname)
+class FaceSequence(Sequence):
+    def __init__(self, file_label_list, batch_size=BATCH_SIZE, shuffle=True):
+        self.data = file_label_list
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.on_epoch_end()
 
-            img = cv2.imread(img_path)
+    def __len__(self):
+        return int(np.ceil(len(self.data) / float(self.batch_size)))
+
+    def on_epoch_end(self):
+        if self.shuffle:
+            np.random.shuffle(self.data)
+
+    def __getitem__(self, idx):
+        batch = self.data[idx * self.batch_size:(idx + 1) * self.batch_size]
+        images = []
+        labels = []
+        for fp, label in batch:
+            img = cv2.imread(fp)
             if img is None:
-                continue
-
-            processed = preprocessor.preprocess(img)
-            if processed is None:
-                continue
-
-            # ensure shape (IMG_SIZE, IMG_SIZE, 3) and float32 normalized [0,1]
-            if processed.dtype != np.float32:
-                processed = processed.astype('float32')
-            if processed.max() > 1.0:
-                processed = processed / 255.0
-
-            if processed.shape[0] != IMG_SIZE or processed.shape[1] != IMG_SIZE:
-                processed = cv2.resize((processed * 255).astype('uint8'), (IMG_SIZE, IMG_SIZE))
-                processed = processed.astype('float32') / 255.0
-
-            images.append(processed)
+                # fallback zero image if file unreadable
+                img_proc = np.zeros((IMG_SIZE, IMG_SIZE, 3), dtype=np.float32)
+            else:
+                img_proc = preprocessor.preprocess(img)
+                if img_proc is None:
+                    img_proc = np.zeros((IMG_SIZE, IMG_SIZE, 3), dtype=np.float32)
+            images.append(img_proc)
             labels.append(label)
+        x = np.array(images, dtype=np.float32)
+        y = to_categorical(labels, NUM_CLASSES)
+        return x, {"emotion": y}
 
-    images = np.array(images, dtype='float32')
-    labels = tf.keras.utils.to_categorical(labels, NUM_CLASSES).astype('float32')
-
-    print(f"Loaded {len(images)} samples from {folder}")
-    return images, labels
-
-# -----------------------------
-# MAIN
-# -----------------------------
 if __name__ == "__main__":
-    trainX, trainY = load_dataset("data/train")
-    valX, valY = load_dataset("data/val")
+    train_files = list_files_in_folder("data/train")
+    val_files = list_files_in_folder("data/val")
 
-    if len(trainX) == 0:
-        raise RuntimeError("No training images found. Check data/train folder structure.")
+    print("Train files:", len(train_files), "Val files:", len(val_files))
+    if len(train_files) == 0:
+        raise RuntimeError("No training files found in data/train - check your dataset path.")
 
-    # ensure float32 (safety)
-    trainX = trainX.astype('float32')
-    trainY = trainY.astype('float32')
-    valX = valX.astype('float32') if len(valX) > 0 else np.array([], dtype='float32')
-    valY = valY.astype('float32') if len(valY) > 0 else np.array([], dtype='float32')
+    train_seq = FaceSequence(train_files, batch_size=BATCH_SIZE, shuffle=True)
+    val_seq   = FaceSequence(val_files, batch_size=BATCH_SIZE, shuffle=False)
 
-    # build model (single-output: emotion)
+    # Build model
     model = build_mobilenet_emotion(num_classes=NUM_CLASSES, embedding_dim=128)
 
-    # Stage 1 — train head only
+    # Stage 1: train head only
     model.compile(
         optimizer=tf.keras.optimizers.Adam(1e-3),
-        loss="categorical_crossentropy",
-        metrics=["accuracy"]
+        loss={"emotion": "categorical_crossentropy"},
+        metrics={"emotion": "accuracy"}
     )
 
     print("Training head (backbone frozen)...")
     model.fit(
-        trainX, trainY,
-        validation_data=(valX, valY) if len(valX) > 0 else None,
+        train_seq,
+        validation_data=val_seq if len(val_files) > 0 else None,
         epochs=EPOCHS_HEAD,
-        batch_size=BATCH_SIZE
+        use_multiprocessing=False,
+        workers=2
     )
 
-    # Stage 2 — fine-tune top layers
-    # unfreeze last N layers (tune N as needed)
+    # Stage 2: unfreeze top layers
     for layer in model.layers[-20:]:
         layer.trainable = True
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(1e-4),
-        loss="categorical_crossentropy",
-        metrics=["accuracy"]
+        loss={"emotion": "categorical_crossentropy"},
+        metrics={"emotion": "accuracy"}
     )
 
     print("Fine-tuning top layers...")
     model.fit(
-        trainX, trainY,
-        validation_data=(valX, valY) if len(valX) > 0 else None,
+        train_seq,
+        validation_data=val_seq if len(val_files) > 0 else None,
         epochs=EPOCHS_FINE,
-        batch_size=BATCH_SIZE
+        
     )
 
-    # save model
     model.save(MODEL_SAVE_PATH)
-    print(f"Model saved as {MODEL_SAVE_PATH}")
+    print("Saved model:", MODEL_SAVE_PATH)
 
-    # quick tip: extract embeddings later with:
-    # embedding_model = tf.keras.Model(inputs=model.input,
-    #                                  outputs=model.get_layer('face_embedding').output)
-    # embs = embedding_model.predict(some_images)
