@@ -14,14 +14,14 @@ EPOCHS_FINE = 3
 DATA_PATH = "data_npy"  # << 🔥 use preprocessed npy data
 MODEL_SAVE_PATH = "face_emotion_v1.keras"
 
-from model.mobilenet_emotion import build_mobilenet_emotion
+from model.mobilenet_emotion import build_mobilenet_emotion  
 
 
 # -------------- DATA SEQUENCE ----------------
 class FastNpySequence(Sequence):
     def __init__(self, file_label_list, batch_size=BATCH_SIZE, shuffle=True):
         self.data = file_label_list
-        self.batch_size = batch_size
+        self.batch_size = batch_size   
         self.shuffle = shuffle
         self.on_epoch_end()
 
@@ -29,10 +29,10 @@ class FastNpySequence(Sequence):
         return int(np.ceil(len(self.data) / self.batch_size))
 
     def on_epoch_end(self):
-        if self.shuffle:
+        if self.shuffle:  
             np.random.shuffle(self.data)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx):   
         batch = self.data[idx*self.batch_size:(idx+1)*self.batch_size]
         images, labels = [], []
 
@@ -56,8 +56,8 @@ def load_file_list(split):
 
         for fname in os.listdir(class_dir):
             if fname.endswith(".npy"):
-                files.append((os.path.join(class_dir, fname), label))
-    return files
+                files.append((os.path.join(class_dir, fname), label))   
+    return files  
 
 
 # ---------------- TRAIN ----------------
@@ -76,14 +76,14 @@ if __name__ == "__main__":
     # stage 1
     model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),
                   loss="categorical_crossentropy",
-                  metrics=["accuracy"])
+                  metrics=["accuracy"])  
 
     print("\nTraining head...")
-    model.fit(train_seq, validation_data=val_seq, epochs=EPOCHS_HEAD)
+    model.fit(train_seq, validation_data=val_seq, epochs=EPOCHS_HEAD)  
 
     # stage 2
-    for layer in model.layers[-20:]:
-        layer.trainable = True
+    for layer in model.layers[-20:]: 
+        layer.trainable = True 
 
     model.compile(optimizer=tf.keras.optimizers.Adam(1e-4),
                   loss="categorical_crossentropy",

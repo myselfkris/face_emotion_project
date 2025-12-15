@@ -13,7 +13,7 @@ project_root/data/processed/
 project_root/data/train/
 project_root/data/val/
 project_root/data/test/
-
+project_root/frames_output/
 # Ignore CSVs & dataset files
 *.csv
 *.zip

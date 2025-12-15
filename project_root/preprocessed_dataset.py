@@ -14,10 +14,10 @@ OUT_PATH = "data_npy"                   # new npy dataset
 
 pp = FacePreprocessor()
 
-os.makedirs(OUT_PATH, exist_ok=True)
+os.makedirs(OUT_PATH, exist_ok=True)       
 
-def ensure_dir(path):
-    if not os.path.exists(path):
+def ensure_dir(path):    
+    if not os.path.exists(path):  
         os.makedirs(path)
 
 def preprocess_split(split_name):
